@@ -1,18 +1,165 @@
 <!DOCTYPE html>
 <html lang="fr">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Photo avec Gemini</title>
-<style>
-  body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; background:#f5f5f7; color:#1d1d1f; text-align:center; padding:60px 20px; }
-  h1 { color:#0071e3; }
-  p { color:#86868b; }
-</style>
+    <meta charset="UTF-8">
+    <title>Interface Gemini Multimodal</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; max-width: 700px; margin: 40px auto; padding: 0 20px; background: #f5f5f7; color: #1d1d1f; }
+        h2 { font-size: 1.5rem; margin-bottom: 20px; }
+        .card { background: white; padding: 20px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); margin-bottom: 20px; }
+        label { display: block; font-weight: 600; margin-bottom: 8px; font-size: 0.9rem; }
+        input[type="text"], textarea { width: 100%; padding: 10px; border: 1px solid #d2d2d7; border-radius: 8px; font-size: 1rem; box-sizing: border-box; margin-bottom: 12px; }
+        textarea { height: 100px; resize: vertical; }
+        #drop-zone { border: 2px dashed #d2d2d7; border-radius: 8px; padding: 20px; text-align: center; color: #86868b; background: #fafafa; cursor: pointer; margin-bottom: 12px; min-height: 80px; display: flex; align-items: center; justify-content: center; flex-direction: column; }
+        #drop-zone.dragover { border-color: #0071e3; background: #e8f0fe; color: #0071e3; }
+        #preview { max-width: 100%; max-height: 150px; border-radius: 6px; margin-top: 10px; display: none; }
+        button { background: #0071e3; color: white; border: none; padding: 12px 20px; font-size: 1rem; font-weight: 600; border-radius: 8px; cursor: pointer; width: 100%; }
+        button:hover { background: #0077ed; }
+        #response { background: #fff; padding: 15px; border-radius: 8px; border: 1px solid #d2d2d7; white-space: pre-wrap; font-family: monospace; font-size: 0.9rem; margin-top: 20px; display: none; }
+        .loader { display: none; text-align: center; margin: 15px 0; color: #86868b; }
+    </style>
 </head>
 <body>
-<h1>Photo avec Gemini</h1>
-<p>Nouvelle application créée avec Le Déployeur.</p>
-<p>Déploie ton code depuis l'étape 3 pour remplacer cette page.</p>
+
+    <h2>Requête Gemini Multimodale</h2>
+
+    <div class="card">
+        <label for="apiKey">Clé API Gemini :</label>
+        <input type="text" id="apiKey" placeholder="Entrez votre clé API...">
+
+        <label for="question">Votre question :</label>
+        <textarea id="question" placeholder="Posez votre question ici..."></textarea>
+
+        <label>Image (Glissez-déposez ou faites Cmd+V / Copier-Coller ici) :</label>
+        <div id="drop-zone">Glissez une image ici ou collez-la (Ctrl/Cmd + V)</div>
+        <img id="preview" alt="Aperçu de l'image">
+        <input type="hidden" id="imageBase64">
+        <input type="hidden" id="imageMimeType">
+    </div>
+
+    <button id="sendBtn">Envoyer la requête</button>
+
+    <div class="loader" id="loader">Interrogation de Gemini en cours...</div>
+    <div id="response"></div>
+
+<script>
+    const apiKeyInput = document.getElementById('apiKey');
+    const questionInput = document.getElementById('question');
+    const dropZone = document.getElementById('drop-zone');
+    const preview = document.getElementById('preview');
+    const imageBase64Input = document.getElementById('imageBase64');
+    const imageMimeTypeInput = document.getElementById('imageMimeType');
+    const sendBtn = document.getElementById('sendBtn');
+    const responseBox = document.getElementById('response');
+    const loader = document.getElementById('loader');
+
+    // Restauration LocalStorage
+    if(localStorage.getItem('gemini_api_key')) apiKeyInput.value = localStorage.getItem('gemini_api_key');
+    if(localStorage.getItem('gemini_question')) questionInput.value = localStorage.getItem('gemini_question');
+
+    // Sauvegarde temps réel LocalStorage
+    apiKeyInput.addEventListener('input', () => localStorage.setItem('gemini_api_key', apiKeyInput.value));
+    questionInput.addEventListener('input', () => localStorage.setItem('gemini_question', questionInput.value));
+
+    // Gestion Image (Drag & Drop)
+    dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('dragover'); });
+    dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+    dropZone.addEventListener('drop', (e) => {
+        e.preventDefault();
+        dropZone.classList.remove('dragover');
+        if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+            processFile(e.dataTransfer.files[0]);
+        }
+    });
+
+    // Gestion Copier-Coller global (Cmd+V)
+    window.addEventListener('paste', (e) => {
+        const items = e.clipboardData.items;
+        for (let item of items) {
+            if (item.type.indexOf('image') === 0) {
+                processFile(item.getAsFile());
+                break;
+            }
+        }
+    });
+
+    function processFile(file) {
+        const reader = new FileReader();
+        reader.onload = function(event) {
+            const base64String = event.target.result.split(',')[1];
+            imageBase64Input.value = base64String;
+            imageMimeTypeInput.value = file.type;
+            preview.src = event.target.result;
+            preview.style.display = 'block';
+            dropZone.style.display = 'none';
+        };
+        reader.readAsDataURL(file);
+    }
+
+    // Clic sur la zone de drop pour réinitialiser ou autre si besoin
+    dropZone.addEventListener('click', () => {
+        alert("Vous pouvez coller une image directement avec Cmd+V ou glisser-déposer un fichier image dans cette zone.");
+    });
+
+    // Envoi de la requête
+    sendBtn.addEventListener('click', async () => {
+        const apiKey = apiKeyInput.value.trim();
+        const question = questionInput.value.trim();
+        const imgData = imageBase64Input.value;
+        const mimeType = imageMimeTypeInput.value;
+
+        if (!apiKey) { alert("Veuillez renseigner votre clé API."); return; }
+        if (!question && !imgData) { alert("Veuillez saisir une question ou fournir une image."); return; }
+
+        loader.style.display = 'block';
+        responseBox.style.display = 'none';
+
+        // Construction du payload JSON exactement comme demandé
+        let partsArray = [];
+        if (question) {
+            partsArray.push({ "text": question });
+        }
+        if (imgData) {
+            partsArray.push({
+                "inline_data": {
+                    "mime_type": mimeType,
+                    "data": imgData
+                }
+            });
+        }
+
+        const payload = {
+            "contents": [
+                {
+                    "parts": partsArray
+                }
+            ]
+        };
+
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
+
+        try {
+            const res = await fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            const data = await res.json();
+            loader.style.display = 'none';
+            responseBox.style.display = 'block';
+
+            if (data.candidates && data.candidates[0].content.parts[0].text) {
+                responseBox.textContent = data.candidates[0].content.parts[0].text;
+            } else {
+                responseBox.textContent = JSON.stringify(data, null, 2);
+            }
+        } catch (err) {
+            loader.style.display = 'none';
+            responseBox.style.display = 'block';
+            responseBox.textContent = "Erreur réseau : " + err.message;
+        }
+    });
+</script>
+
 </body>
 </html>
