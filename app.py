@@ -13,7 +13,7 @@ Usage :
     python3 app.py            # démarre en arrière-plan et ouvre la page sur le Mac
     python3 app.py --fg       # reste au premier plan (Ctrl+C pour arrêter)
     python3 app.py --lan      # autorise aussi le réseau local, pas seulement Tailscale
-    python3 app.py --port 9000
+    python3 app.py --port 45679   # si jamais 45678 est pris
 """
 
 import atexit
@@ -21,6 +21,8 @@ import http.server
 import ipaddress
 import json
 import os
+import re
+import shutil
 import signal
 import socket
 import subprocess
@@ -32,8 +34,22 @@ import urllib.request
 import webbrowser
 
 # ===================== VERSION & HISTORIQUE =====================
-VERSION = "2.0.1"
+VERSION = "2.0.3"
 HISTORIQUE = [
+    ("2.0.3", "2026-09-12",
+     "Port par défaut changé de 8080 à 45678. Le 8080 est le premier port que prennent la plupart des "
+     "serveurs de développement : collision quasi assurée avec un autre script, comme cela s'est "
+     "produit au lancement. Le 45678 n'est attribué à aucun service connu, reste hors de la plage "
+     "éphémère de macOS (49152 et au-delà, où le système pioche pour les connexions sortantes) et se "
+     "tape facilement sur l'iPhone. L'option --port reste disponible pour en choisir un autre."),
+    ("2.0.2", "2026-09-12",
+     "Corrigé : Tailscale était annoncé introuvable alors qu'il tournait, et seule l'adresse du réseau "
+     "local était proposée. La détection ne reposait que sur le binaire en ligne de commande, dont "
+     "l'emplacement varie selon le mode d'installation. L'adresse 100.x est désormais lue directement "
+     "sur les interfaces réseau de la machine (équivalent de `ifconfig | grep \"inet 100.\"`), ce qui "
+     "fonctionne quelle que soit l'installation ; le binaire n'est plus utilisé que pour récupérer le "
+     "nom MagicDNS, et son absence ne prive plus de l'adresse Tailscale. Chemins de recherche du "
+     "binaire élargis (PATH via shutil.which, en plus des emplacements connus)."),
     ("2.0.1", "2026-09-12",
      "Corrigé : le serveur mourait avec le Terminal. Le simple fork hérité de la v1 laissait le "
      "processus dans la session du Terminal, donc tué par le SIGHUP envoyé à la fermeture de la "
@@ -57,7 +73,7 @@ HISTORIQUE = [
 ]
 
 # ===================== CONFIGURATION =====================
-PORT = 8080
+PORT = 45678   # port peu banal, volontairement à l'écart des 8080/8000/3000 et hors plage éphémère
 DOSSIER = os.path.dirname(os.path.abspath(__file__))
 FICHIER_CLE = os.path.join(DOSSIER, "gemini-cle.json")
 FICHIER_PID = os.path.join(DOSSIER, "gemini-serveur.pid")
@@ -70,6 +86,7 @@ autoriser_lan = False
 
 CHEMINS_TAILSCALE = [
     "/Applications/Tailscale.app/Contents/MacOS/Tailscale",
+    os.path.expanduser("~/Applications/Tailscale.app/Contents/MacOS/Tailscale"),
     "/usr/local/bin/tailscale",
     "/opt/homebrew/bin/tailscale",
     "tailscale",
@@ -103,7 +120,13 @@ def apercu_cle(cle):
 
 # ===================== ADRESSES =====================
 def binaire_tailscale():
-    for chemin in CHEMINS_TAILSCALE:
+    """Cherche la commande tailscale. Elle n'est PAS indispensable : elle ne sert qu'à obtenir le nom
+    MagicDNS, l'adresse 100.x étant lue directement sur les interfaces réseau (voir ip_tailscale)."""
+    chemins = list(CHEMINS_TAILSCALE)
+    trouve = shutil.which("tailscale")
+    if trouve:
+        chemins.insert(0, trouve)
+    for chemin in chemins:
         try:
             resultat = subprocess.run([chemin, "version"], capture_output=True, timeout=5)
             if resultat.returncode == 0:
@@ -113,29 +136,52 @@ def binaire_tailscale():
     return None
 
 
+def ip_tailscale():
+    """Lit l'adresse Tailscale (plage 100.64.0.0/10) directement sur les interfaces de la machine.
+
+    C'est la méthode fiable : elle ne dépend ni de l'emplacement du binaire tailscale, ni de la
+    manière dont l'app a été installée (App Store, téléchargement direct, Homebrew…). L'équivalent
+    exact de `ifconfig | grep "inet 100."`.
+    """
+    try:
+        res = subprocess.run(["ifconfig"], capture_output=True, text=True, timeout=8)
+        if res.returncode != 0:
+            return None
+        for correspondance in re.finditer(r"\binet (\d+\.\d+\.\d+\.\d+)", res.stdout):
+            try:
+                adresse = ipaddress.ip_address(correspondance.group(1))
+            except ValueError:
+                continue
+            if adresse in RESEAU_TAILSCALE:
+                return str(adresse)
+    except Exception:
+        pass
+    return None
+
+
 def infos_tailscale():
-    """Retourne (ip_v4, nom_magicdns) ou (None, None) si Tailscale n'est pas disponible."""
-    binaire = binaire_tailscale()
-    if not binaire:
-        return None, None
-    ip = None
+    """Retourne (ip_v4, nom_magicdns). L'IP peut exister sans le nom si le binaire est introuvable."""
+    ip = ip_tailscale()
     nom = None
-    try:
-        res = subprocess.run([binaire, "ip", "-4"], capture_output=True, text=True, timeout=5)
-        if res.returncode == 0:
-            lignes = [l.strip() for l in res.stdout.splitlines() if l.strip()]
-            if lignes:
-                ip = lignes[0]
-    except Exception:
-        pass
-    try:
-        res = subprocess.run([binaire, "status", "--json"], capture_output=True, text=True, timeout=8)
-        if res.returncode == 0:
-            etat = json.loads(res.stdout)
-            brut = (etat.get("Self") or {}).get("DNSName") or ""
-            nom = brut.rstrip(".") or None
-    except Exception:
-        pass
+    binaire = binaire_tailscale()
+    if binaire:
+        if not ip:
+            try:
+                res = subprocess.run([binaire, "ip", "-4"], capture_output=True, text=True, timeout=5)
+                if res.returncode == 0:
+                    lignes = [l.strip() for l in res.stdout.splitlines() if l.strip()]
+                    if lignes:
+                        ip = lignes[0]
+            except Exception:
+                pass
+        try:
+            res = subprocess.run([binaire, "status", "--json"], capture_output=True, text=True, timeout=8)
+            if res.returncode == 0:
+                etat = json.loads(res.stdout)
+                brut = (etat.get("Self") or {}).get("DNSName") or ""
+                nom = brut.rstrip(".") or None
+        except Exception:
+            pass
     return ip, nom
 
 
@@ -469,7 +515,7 @@ def main():
         try:
             PORT = int(sys.argv[sys.argv.index("--port") + 1])
         except (IndexError, ValueError):
-            print("Option --port mal formée, port 8080 conservé.")
+            print(f"Option --port mal formée, port {PORT} conservé.")
 
     if "--stop" in sys.argv:
         commande_stop()
@@ -492,7 +538,7 @@ def main():
         else:
             print("Un autre programme occupe ce port. Pour savoir lequel :")
             print(f"  lsof -nP -iTCP:{PORT} -sTCP:LISTEN")
-            print("Ou choisis un autre port : python3 app.py --port 8081")
+            print("Ou choisis un autre port : python3 app.py --port 45679")
         sys.exit(1)
     finally:
         test.close()
