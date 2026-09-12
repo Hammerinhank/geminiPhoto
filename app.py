@@ -1,37 +1,402 @@
+#!/usr/bin/env python3
+"""Serveur local pour index.html — accessible depuis l'iMac et depuis l'iPhone via Tailscale.
+
+Ce que le script apporte à la page :
+  · il la sert sur toutes les interfaces (donc aussi sur l'adresse Tailscale du Mac) ;
+  · il affiche l'adresse exacte à ouvrir depuis l'iPhone ;
+  · il relaie les requêtes vers Gemini (/api/gemini), ce qui permet de garder la clé API
+    sur le Mac : l'iPhone n'a plus besoin de la connaître ;
+  · il n'accepte par défaut que les connexions venant de la machine elle-même ou du
+    tailnet (100.64.0.0/10), pour que la clé ne soit pas exposée au Wi-Fi environnant.
+
+Usage :
+    python3 app.py            # démarre en arrière-plan et ouvre la page sur le Mac
+    python3 app.py --fg       # reste au premier plan (Ctrl+C pour arrêter)
+    python3 app.py --lan      # autorise aussi le réseau local, pas seulement Tailscale
+    python3 app.py --port 9000
+"""
+
 import http.server
+import ipaddress
+import json
 import os
-import socketserver
+import socket
+import subprocess
 import sys
 import threading
+import time
+import urllib.error
+import urllib.request
 import webbrowser
 
+# ===================== VERSION & HISTORIQUE =====================
+VERSION = "2.0.0"
+HISTORIQUE = [
+    ("2.0.0", "2026-09-12",
+     "Serveur utilisable depuis l'iPhone via Tailscale : écoute sur toutes les interfaces, détecte "
+     "et affiche l'adresse Tailscale (IP et nom MagicDNS) à ouvrir depuis le téléphone, sert la page "
+     "sans cache (pour ne jamais garder une version périmée sur l'iPhone), et gère plusieurs requêtes "
+     "en parallèle. Nouvelles routes : /api/statut, /api/cle (clé Gemini enregistrée sur le Mac, en "
+     "fichier à droits restreints) et /api/gemini (relais vers l'API Google, la clé ne quitte donc "
+     "plus le Mac). Les connexions sont limitées à la machine elle-même et au tailnet, sauf --lan. "
+     "Options --fg (premier plan) et --port."),
+    ("1.0.0", "",
+     "Version d'origine : petit serveur de fichiers statiques sur le port 8080, détaché par fork, "
+     "ouvrant index.html dans le navigateur du Mac."),
+]
+
+# ===================== CONFIGURATION =====================
 PORT = 8080
+DOSSIER = os.path.dirname(os.path.abspath(__file__))
+FICHIER_CLE = os.path.join(DOSSIER, "gemini-cle.json")
+RESEAU_TAILSCALE = ipaddress.ip_network("100.64.0.0/10")
+MODELE_DEFAUT = "gemini-2.5-flash"
+DELAI_GEMINI = 180  # secondes
+
+autoriser_lan = False
+
+CHEMINS_TAILSCALE = [
+    "/Applications/Tailscale.app/Contents/MacOS/Tailscale",
+    "/usr/local/bin/tailscale",
+    "/opt/homebrew/bin/tailscale",
+    "tailscale",
+]
 
 
+# ===================== CLÉ API =====================
+def charger_cle():
+    try:
+        with open(FICHIER_CLE, "r", encoding="utf-8") as f:
+            return (json.load(f).get("cle") or "").strip()
+    except Exception:
+        return ""
+
+
+def enregistrer_cle(cle):
+    with open(FICHIER_CLE, "w", encoding="utf-8") as f:
+        json.dump({"cle": cle, "maj": time.strftime("%Y-%m-%dT%H:%M:%S")}, f)
+    try:
+        os.chmod(FICHIER_CLE, 0o600)  # lisible par le seul propriétaire
+    except Exception:
+        pass
+
+
+def apercu_cle(cle):
+    """Représentation non sensible d'une clé, pour l'afficher dans la page."""
+    if not cle:
+        return ""
+    return f"{cle[:6]}…{cle[-4:]}" if len(cle) > 12 else "clé courte"
+
+
+# ===================== ADRESSES =====================
+def binaire_tailscale():
+    for chemin in CHEMINS_TAILSCALE:
+        try:
+            resultat = subprocess.run([chemin, "version"], capture_output=True, timeout=5)
+            if resultat.returncode == 0:
+                return chemin
+        except Exception:
+            continue
+    return None
+
+
+def infos_tailscale():
+    """Retourne (ip_v4, nom_magicdns) ou (None, None) si Tailscale n'est pas disponible."""
+    binaire = binaire_tailscale()
+    if not binaire:
+        return None, None
+    ip = None
+    nom = None
+    try:
+        res = subprocess.run([binaire, "ip", "-4"], capture_output=True, text=True, timeout=5)
+        if res.returncode == 0:
+            lignes = [l.strip() for l in res.stdout.splitlines() if l.strip()]
+            if lignes:
+                ip = lignes[0]
+    except Exception:
+        pass
+    try:
+        res = subprocess.run([binaire, "status", "--json"], capture_output=True, text=True, timeout=8)
+        if res.returncode == 0:
+            etat = json.loads(res.stdout)
+            brut = (etat.get("Self") or {}).get("DNSName") or ""
+            nom = brut.rstrip(".") or None
+    except Exception:
+        pass
+    return ip, nom
+
+
+def ip_locale():
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("192.168.255.255", 1))
+        adresse = s.getsockname()[0]
+        s.close()
+        return adresse
+    except Exception:
+        return None
+
+
+def adresses_utiles(port):
+    """Adresses à proposer, de la plus pertinente à la moins pertinente."""
+    ip_ts, nom_ts = infos_tailscale()
+    liste = []
+    if nom_ts:
+        liste.append(f"http://{nom_ts}:{port}/")
+    if ip_ts:
+        liste.append(f"http://{ip_ts}:{port}/")
+    locale = ip_locale()
+    if locale:
+        liste.append(f"http://{locale}:{port}/")
+    liste.append(f"http://localhost:{port}/")
+    return liste, (ip_ts is None and nom_ts is None)
+
+
+# ===================== RELAIS GEMINI =====================
+def interroger_gemini(cle, modele, question, image_base64, mime_type):
+    parties = []
+    if question:
+        parties.append({"text": question})
+    if image_base64:
+        parties.append({"inline_data": {"mime_type": mime_type or "image/jpeg", "data": image_base64}})
+    corps = json.dumps({"contents": [{"parts": parties}]}).encode("utf-8")
+    url = (f"https://generativelanguage.googleapis.com/v1beta/models/"
+           f"{modele}:generateContent?key={cle}")
+    requete = urllib.request.Request(
+        url, data=corps, method="POST",
+        headers={"Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(requete, timeout=DELAI_GEMINI) as reponse:
+        return json.loads(reponse.read().decode("utf-8"))
+
+
+def texte_de_reponse(data):
+    try:
+        parties = data["candidates"][0]["content"]["parts"]
+        texte = "".join(p.get("text", "") for p in parties).strip()
+        return texte or None
+    except Exception:
+        return None
+
+
+# ===================== SERVEUR HTTP =====================
 class Handler(http.server.SimpleHTTPRequestHandler):
 
-  def log_message(self, format, *args):
-    # Désactive les logs dans le terminal pour garder la propreté
-    pass
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, directory=DOSSIER, **kwargs)
+
+    def log_message(self, format, *args):
+        pass  # terminal gardé propre, comme dans la version d'origine
+
+    # ---- En-têtes : jamais de cache, sinon l'iPhone garde une version périmée de la page ----
+    def end_headers(self):
+        self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+        self.send_header("Pragma", "no-cache")
+        super().end_headers()
+
+    # ---- Contrôle d'accès ----
+    def client_autorise(self):
+        if autoriser_lan:
+            return True
+        brut = self.client_address[0]
+        if brut in ("127.0.0.1", "::1"):
+            return True
+        if brut.startswith("::ffff:"):
+            brut = brut[7:]
+        try:
+            adresse = ipaddress.ip_address(brut)
+        except ValueError:
+            return False
+        return adresse.is_loopback or adresse in RESEAU_TAILSCALE
+
+    def refuser(self):
+        message = ("Accès refusé : cette page n'est ouverte qu'à cette machine et au tailnet "
+                   "Tailscale. Relance app.py avec --lan pour autoriser le réseau local.")
+        self.repondre_json({"ok": False, "erreur": message}, code=403)
+
+    def repondre_json(self, donnees, code=200):
+        corps = json.dumps(donnees, ensure_ascii=False).encode("utf-8")
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(corps)))
+        self.end_headers()
+        self.wfile.write(corps)
+
+    def lire_json(self):
+        try:
+            taille = int(self.headers.get("Content-Length") or 0)
+            if taille <= 0:
+                return {}
+            return json.loads(self.rfile.read(taille).decode("utf-8"))
+        except Exception:
+            return None
+
+    # ---- Routes ----
+    def do_GET(self):
+        if not self.client_autorise():
+            self.refuser()
+            return
+        chemin = self.path.split("?")[0].rstrip("/")
+        if chemin == "/api/statut":
+            cle = charger_cle()
+            adresses, sans_tailscale = adresses_utiles(PORT)
+            self.repondre_json({
+                "ok": True,
+                "version": VERSION,
+                "cle_enregistree": bool(cle),
+                "cle_apercu": apercu_cle(cle),
+                "adresses": adresses,
+                "tailscale_absent": sans_tailscale,
+                "modele_defaut": MODELE_DEFAUT,
+            })
+            return
+        if chemin == "/api/cle":
+            cle = charger_cle()
+            self.repondre_json({"ok": True, "cle_enregistree": bool(cle), "cle_apercu": apercu_cle(cle)})
+            return
+        super().do_GET()
+
+    def do_HEAD(self):
+        if not self.client_autorise():
+            self.refuser()
+            return
+        super().do_HEAD()
+
+    def do_POST(self):
+        if not self.client_autorise():
+            self.refuser()
+            return
+        chemin = self.path.split("?")[0].rstrip("/")
+        donnees = self.lire_json()
+        if donnees is None:
+            self.repondre_json({"ok": False, "erreur": "Corps de requête illisible (JSON attendu)."}, code=400)
+            return
+
+        if chemin == "/api/cle":
+            cle = (donnees.get("cle") or "").strip()
+            if not cle:
+                self.repondre_json({"ok": False, "erreur": "Aucune clé transmise."}, code=400)
+                return
+            try:
+                enregistrer_cle(cle)
+            except Exception as e:
+                self.repondre_json({"ok": False, "erreur": f"Écriture impossible : {e}"}, code=500)
+                return
+            self.repondre_json({"ok": True, "cle_apercu": apercu_cle(cle)})
+            return
+
+        if chemin == "/api/gemini":
+            cle = (donnees.get("cle") or "").strip() or charger_cle()
+            if not cle:
+                self.repondre_json({
+                    "ok": False,
+                    "erreur": "Aucune clé API disponible : saisis-la dans la page puis enregistre-la sur le Mac.",
+                }, code=400)
+                return
+            modele = (donnees.get("modele") or MODELE_DEFAUT).strip()
+            question = donnees.get("question") or ""
+            image = donnees.get("image") or ""
+            mime = donnees.get("mime_type") or "image/jpeg"
+            if not question and not image:
+                self.repondre_json({"ok": False, "erreur": "Ni question ni image dans la requête."}, code=400)
+                return
+            depart = time.time()
+            try:
+                brut = interroger_gemini(cle, modele, question, image, mime)
+            except urllib.error.HTTPError as e:
+                detail = ""
+                try:
+                    detail = json.loads(e.read().decode("utf-8")).get("error", {}).get("message", "")
+                except Exception:
+                    pass
+                self.repondre_json({
+                    "ok": False,
+                    "erreur": f"Google a répondu HTTP {e.code}" + (f" : {detail}" if detail else ""),
+                }, code=502)
+                return
+            except Exception as e:
+                self.repondre_json({"ok": False, "erreur": f"Appel à Gemini impossible : {e}"}, code=502)
+                return
+            self.repondre_json({
+                "ok": True,
+                "texte": texte_de_reponse(brut),
+                "brut": brut,
+                "modele": modele,
+                "duree": round(time.time() - depart, 1),
+            })
+            return
+
+        self.repondre_json({"ok": False, "erreur": "Route inconnue."}, code=404)
 
 
-def run_server():
-  os.chdir(os.path.dirname(os.path.abspath(__file__)))
-  with socketserver.TCPServer(("", PORT), Handler) as httpd:
-    httpd.serve_forever()
+class Serveur(http.server.ThreadingHTTPServer):
+    daemon_threads = True
+    allow_reuse_address = True
+
+
+def lancer_serveur():
+    os.chdir(DOSSIER)
+    with Serveur(("", PORT), Handler) as httpd:
+        httpd.serve_forever()
+
+
+# ===================== DÉMARRAGE =====================
+def main():
+    global PORT, autoriser_lan
+
+    premier_plan = "--fg" in sys.argv
+    autoriser_lan = "--lan" in sys.argv
+    if "--port" in sys.argv:
+        try:
+            PORT = int(sys.argv[sys.argv.index("--port") + 1])
+        except (IndexError, ValueError):
+            print("Option --port mal formée, port 8080 conservé.")
+
+    # Vérifie que le port est libre avant de forker : sinon l'échec passerait inaperçu.
+    test = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    test.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        test.bind(("", PORT))
+    except OSError as e:
+        print(f"Impossible d'utiliser le port {PORT} : {e}")
+        print("Un serveur est peut-être déjà lancé. Essaie : python3 app.py --port 8081")
+        sys.exit(1)
+    finally:
+        test.close()
+
+    adresses, sans_tailscale = adresses_utiles(PORT)
+    cle = charger_cle()
+
+    print(f"\napp.py v{VERSION} — serveur Gemini local")
+    print(f"Dossier servi : {DOSSIER}")
+    print(f"Clé Gemini enregistrée : {'oui (' + apercu_cle(cle) + ')' if cle else 'non — saisis-la dans la page'}")
+    print(f"Accès : {'tout le réseau local (--lan)' if autoriser_lan else 'cette machine et le tailnet Tailscale'}")
+    if sans_tailscale:
+        print("Tailscale introuvable sur cette machine : seules les adresses locales sont proposées.")
+    print("\nAdresses à ouvrir :")
+    for adresse in adresses:
+        print(f"  {adresse}")
+    print("\nDepuis l'iPhone : ouvre la première adresse (Tailscale doit être actif sur les deux appareils).")
+    print("Arrêt : Ctrl+C au premier plan, sinon `pkill -f app.py`.\n")
+    sys.stdout.flush()
+
+    if not premier_plan and hasattr(os, "fork"):
+        if os.fork() != 0:
+            sys.exit(0)  # le terminal est rendu, le serveur continue en arrière-plan
+
+    fil = threading.Thread(target=lancer_serveur, daemon=True)
+    fil.start()
+
+    try:
+        webbrowser.open(f"http://localhost:{PORT}/index.html")
+    except Exception:
+        pass
+
+    try:
+        fil.join()
+    except KeyboardInterrupt:
+        print("\nServeur arrêté.")
 
 
 if __name__ == "__main__":
-  # Détachement du processus sur macOS
-  if os.fork() != 0:
-    sys.exit(0)
-
-  # Démarrage du serveur dans un thread en arrière-plan
-  server_thread = threading.Thread(target=run_server, daemon=True)
-  server_thread.start()
-
-  # Ouverture automatique de la page web
-  webbrowser.open(f"http://localhost:{PORT}/index.html")
-
-  # Maintien du processus actif
-  server_thread.join()
+    main()
