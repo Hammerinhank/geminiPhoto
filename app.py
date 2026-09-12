@@ -34,8 +34,16 @@ import urllib.request
 import webbrowser
 
 # ===================== VERSION & HISTORIQUE =====================
-VERSION = "2.0.3"
+VERSION = "2.0.4"
 HISTORIQUE = [
+    ("2.0.4", "2026-09-12",
+     "Le nom MagicDNS (du type imactavernier-2.tail78c299.ts.net), habituel pour joindre une machine "
+     "du tailnet, n'apparaissait pas : il n'était cherché que via le binaire tailscale, introuvable "
+     "sur ce Mac, et seule l'adresse 100.x était proposée — équivalente, mais inhabituelle. Deux voies "
+     "de secours ajoutées : le DNS inverse sur l'adresse 100.x, auquel MagicDNS répond directement par "
+     "le nom complet, puis la reconstitution nom de la machine + domaine du tailnet lu dans les "
+     "domaines de recherche DNS (scutil). Une constante NOM_TAILSCALE en tête de fichier permet en "
+     "dernier ressort de l'écrire à la main."),
     ("2.0.3", "2026-09-12",
      "Port par défaut changé de 8080 à 45678. Le 8080 est le premier port que prennent la plupart des "
      "serveurs de développement : collision quasi assurée avec un autre script, comme cela s'est "
@@ -80,6 +88,10 @@ FICHIER_PID = os.path.join(DOSSIER, "gemini-serveur.pid")
 FICHIER_LOG = os.path.join(DOSSIER, "gemini-serveur.log")
 RESEAU_TAILSCALE = ipaddress.ip_network("100.64.0.0/10")
 MODELE_DEFAUT = "gemini-2.5-flash"
+
+# Nom MagicDNS à utiliser si la détection automatique échoue (ex. "imactavernier-2.tail78c299.ts.net").
+# Laisser vide pour laisser le script le trouver tout seul.
+NOM_TAILSCALE = ""
 DELAI_GEMINI = 180  # secondes
 
 autoriser_lan = False
@@ -159,9 +171,62 @@ def ip_tailscale():
     return None
 
 
+def nom_par_dns_inverse(ip):
+    """Demande au résolveur le nom associé à l'adresse 100.x.
+
+    Quand MagicDNS est actif, c'est le résolveur de Tailscale qui répond et rend directement le nom
+    complet du type machine.tailXXXXX.ts.net — sans avoir besoin du binaire tailscale.
+    """
+    if not ip:
+        return None
+    try:
+        nom = socket.gethostbyaddr(ip)[0].rstrip(".")
+        return nom if nom.endswith(".ts.net") else None
+    except Exception:
+        return None
+
+
+def nom_par_scutil():
+    """Reconstitue le nom MagicDNS : nom local de la machine + domaine du tailnet.
+
+    Le domaine (tailXXXXX.ts.net) figure parmi les domaines de recherche DNS que Tailscale installe
+    sur macOS, lisibles avec `scutil --dns`. Dernier recours si les deux méthodes précédentes échouent.
+    """
+    domaine = None
+    try:
+        res = subprocess.run(["scutil", "--dns"], capture_output=True, text=True, timeout=8)
+        if res.returncode == 0:
+            trouve = re.search(r"search domain\[\d+\]\s*:\s*(\S*\.ts\.net)", res.stdout)
+            if trouve:
+                domaine = trouve.group(1).rstrip(".")
+    except Exception:
+        pass
+    if not domaine:
+        return None
+    machine = None
+    try:
+        res = subprocess.run(["scutil", "--get", "LocalHostName"], capture_output=True, text=True, timeout=5)
+        if res.returncode == 0:
+            machine = res.stdout.strip()
+    except Exception:
+        pass
+    if not machine:
+        machine = socket.gethostname().split(".")[0]
+    return f"{machine.lower()}.{domaine}" if machine else None
+
+
 def infos_tailscale():
-    """Retourne (ip_v4, nom_magicdns). L'IP peut exister sans le nom si le binaire est introuvable."""
+    """Retourne (ip_v4, nom_magicdns).
+
+    L'adresse vient des interfaces réseau (fiable en toutes circonstances). Le nom est cherché par
+    trois voies successives, la première qui répond gagne : le binaire tailscale s'il est installé,
+    le DNS inverse via MagicDNS, puis la reconstitution à partir des domaines de recherche DNS.
+    NOM_TAILSCALE, s'il est renseigné en tête de fichier, court-circuite tout cela.
+    """
     ip = ip_tailscale()
+    if NOM_TAILSCALE:
+        return ip, NOM_TAILSCALE
+
     nom = None
     binaire = binaire_tailscale()
     if binaire:
@@ -182,6 +247,11 @@ def infos_tailscale():
                 nom = brut.rstrip(".") or None
         except Exception:
             pass
+
+    if not nom:
+        nom = nom_par_dns_inverse(ip)
+    if not nom:
+        nom = nom_par_scutil()
     return ip, nom
 
 
