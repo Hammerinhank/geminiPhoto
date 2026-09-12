@@ -81,8 +81,23 @@
     font-size:.95rem;margin-top:12px;
   }
   .reponse.erreur{border-left-color:var(--rouge);color:var(--rouge);font-family:ui-monospace,Menlo,monospace;font-size:.85rem;}
-  details.journal{margin-top:16px;font-size:.85rem;color:var(--gris);}
-  details.journal summary{cursor:pointer;font-weight:600;color:var(--texte);}
+  details.section{
+    background:var(--carte);border:1px solid var(--bord);border-radius:14px;
+    margin-top:16px;overflow:hidden;
+  }
+  details.section > summary{
+    cursor:pointer;padding:14px 16px;font-weight:600;font-size:.95rem;
+    list-style:none;color:var(--texte);
+  }
+  details.section > summary::-webkit-details-marker{display:none;}
+  details.section > summary::after{content:"▾";float:right;color:var(--gris);}
+  details.section[open] > summary{border-bottom:1px solid var(--bord);}
+  details.section[open] > summary::after{content:"▴";}
+  .section-corps{padding:16px;}
+  details.journal{font-size:.85rem;color:var(--gris);}
+  details.journal > *:not(summary){padding-inline:16px;}
+  details.journal > *:not(summary):last-child{padding-bottom:16px;}
+  details.journal .aide{margin-top:12px;}
   #journalTexte{
     width:100%;min-height:140px;margin-top:8px;font-family:ui-monospace,Menlo,monospace;
     font-size:.78rem;background:#fff;border:1px solid var(--bord);border-radius:10px;padding:10px;
@@ -119,25 +134,6 @@
 
 <div class="carte">
   <div class="champ">
-    <label for="cleApi">Clé API Gemini</label>
-    <div class="ligne">
-      <input type="password" class="grandit" id="cleApi" placeholder="AIza…" autocomplete="off" autocapitalize="off" spellcheck="false">
-      <button class="secondaire" id="btnVoirCle" type="button">👁</button>
-      <button class="secondaire" id="btnEnregistrerCle" type="button">Enregistrer sur le Mac</button>
-    </div>
-    <p class="aide" id="aideCle">La clé reste sur cet appareil. Enregistrée sur le Mac, elle sert à toutes les requêtes passant par le serveur — l'iPhone n'a alors plus besoin de la saisir.</p>
-  </div>
-
-  <div class="champ">
-    <label for="modele">Modèle</label>
-    <select id="modele">
-      <option value="gemini-2.5-flash">gemini-2.5-flash (rapide)</option>
-      <option value="gemini-2.5-pro">gemini-2.5-pro (plus fin, plus lent)</option>
-      <option value="gemini-2.0-flash">gemini-2.0-flash</option>
-    </select>
-  </div>
-
-  <div class="champ">
     <label for="question">Question</label>
     <textarea id="question" placeholder="Que vois-tu sur cette image ?"></textarea>
   </div>
@@ -165,7 +161,30 @@
   <button class="secondaire" id="btnVider" type="button">🗑 Vider</button>
 </div>
 
-<details class="journal">
+<details class="section">
+  <summary>⚙️ Paramétrages</summary>
+  <div class="section-corps">
+    <div class="champ">
+      <label for="cleApi">Clé API Gemini</label>
+      <div class="ligne">
+        <input type="password" class="grandit" id="cleApi" placeholder="AIza…" autocomplete="off" autocapitalize="off" spellcheck="false">
+        <button class="secondaire" id="btnVoirCle" type="button">👁</button>
+        <button class="secondaire" id="btnEnregistrerCle" type="button">Enregistrer sur le serveur</button>
+      </div>
+      <p class="aide" id="aideCle">La clé reste sur cet appareil. Enregistrée sur le serveur, elle sert à toutes les requêtes qui passent par lui, depuis n'importe quel appareil.</p>
+    </div>
+    <div class="champ">
+      <label for="modele">Modèle</label>
+      <select id="modele">
+        <option value="gemini-2.5-flash">gemini-2.5-flash (rapide)</option>
+        <option value="gemini-2.5-pro">gemini-2.5-pro (plus fin, plus lent)</option>
+        <option value="gemini-2.0-flash">gemini-2.0-flash</option>
+      </select>
+    </div>
+  </div>
+</details>
+
+<details class="section journal">
   <summary>🪲 Journal</summary>
   <p class="aide">Trace pas à pas de chaque requête : utile pour comprendre un échec depuis l'iPhone, où la console du navigateur n'est pas accessible.</p>
   <div class="ligne" style="margin-top:8px;">
@@ -190,8 +209,9 @@
 "use strict";
 
 /* ===================== VERSION & HISTORIQUE ===================== */
-const VERSION = "2.0.0";
+const VERSION = "2.1.0";
 const HISTORIQUE = [
+  { version:"2.1.0", date:"2026-09-12", notes:"La clé API et le choix du modèle quittent le haut de la page : ils sont réunis dans une section repliable « Paramétrages », placée en bas, juste avant le journal, et qui s'ouvre ou se ferme en touchant son titre. On arrive donc directement sur ce qui sert à chaque requête — la question et l'image — les réglages ne se règlent qu'une fois. Le bouton « Enregistrer sur le Mac » devient « Enregistrer sur le serveur » : il fonctionne depuis n'importe quel appareil, iPhone compris, son ancien libellé laissait croire le contraire." },
   { version:"2.0.0", date:"2026-09-12", notes:"Version utilisable aussi bien sur iPhone que sur iMac via Tailscale. La page détecte automatiquement le serveur app.py et passe par lui pour interroger Gemini (la clé API peut alors rester sur le Mac, l'iPhone n'a plus à la saisir) ; si aucun serveur n'est trouvé, elle appelle Gemini directement avec la clé locale, comme avant. Ajout : prise de photo directe et choix dans la photothèque (le glisser-déposer et le Cmd+V n'existent pas sur iPhone), compression automatique de l'image avant envoi (une photo d'iPhone passe de plusieurs Mo à quelques centaines de Ko, et le format HEIC est converti en JPEG), choix du modèle, minuteur pendant l'attente, bouton de copie de la réponse, journal détaillé consultable depuis le téléphone, affichage de l'adresse Tailscale à utiliser depuis l'iPhone, et badge de version cliquable ouvrant cet historique." },
   { version:"1.0.0", date:"2026-09-12", notes:"Version d'origine : une page unique appelant directement l'API Gemini depuis le navigateur, avec clé API et question conservées en localStorage, image fournie par glisser-déposer ou Cmd+V, et réponse affichée en texte brut." }
 ];
@@ -285,19 +305,19 @@ async function verifierServeur(){
     const info = await res.json();
     modeServeur = true;
     cleSurServeur = !!info.cle_enregistree;
-    journal(`Serveur app.py v${info.version} détecté — clé enregistrée sur le Mac : ${cleSurServeur ? "oui (" + info.cle_apercu + ")" : "non"}.`);
+    journal(`Serveur app.py v${info.version} détecté — clé enregistrée sur le serveur : ${cleSurServeur ? "oui (" + info.cle_apercu + ")" : "non"}.`);
     const adresses = (info.adresses || []).map(a => `<span class="adresse">${a}</span>`).join(" · ");
     statutEl.className = "statut ok";
     statutEl.innerHTML =
       `<b>Servi par app.py v${info.version}</b> — les requêtes passent par le Mac.` +
-      `<br>Clé sur le Mac : ${cleSurServeur ? "<b>enregistrée</b> (" + info.cle_apercu + ")" : "<b>aucune</b>, saisis-la puis enregistre-la"}.` +
+      `<br>Clé sur le serveur : ${cleSurServeur ? "<b>enregistrée</b> (" + info.cle_apercu + ")" : "<b>aucune</b>, ouvre Paramétrages pour la saisir"}.` +
       (adresses ? `<br>Adresse à ouvrir depuis l'iPhone : ${adresses}` : "") +
       (info.tailscale_absent ? `<br>Tailscale n'a pas été trouvé sur ce Mac : seule l'adresse du réseau local est proposée.` : "");
   }catch(e){
     modeServeur = false;
     journal("Aucun serveur app.py joignable (" + e.message + ") — mode direct : le navigateur appelle Gemini lui-même.");
     statutEl.className = "statut direct";
-    statutEl.innerHTML = "<b>Mode direct</b> — la page appelle Gemini elle-même, avec la clé saisie ci-dessous. Lance app.py sur le Mac pour partager la clé et passer par le serveur.";
+    statutEl.innerHTML = "<b>Mode direct</b> — la page appelle Gemini elle-même, avec la clé saisie dans Paramétrages. Lance app.py sur le Mac pour partager la clé et passer par le serveur.";
   }
   majAideCle();
 }
@@ -305,9 +325,9 @@ function majAideCle(){
   const aide = document.getElementById("aideCle");
   document.getElementById("btnEnregistrerCle").style.display = modeServeur ? "inline-flex" : "none";
   if(modeServeur && cleSurServeur){
-    aide.textContent = "Une clé est enregistrée sur le Mac : tu peux laisser ce champ vide. Une clé saisie ici a la priorité pour les requêtes lancées depuis cet appareil.";
+    aide.textContent = "Une clé est enregistrée sur le serveur : tu peux laisser ce champ vide. Une clé saisie ici a la priorité pour les requêtes lancées depuis cet appareil.";
   }else if(modeServeur){
-    aide.textContent = "Saisis la clé puis « Enregistrer sur le Mac » : elle sera réutilisée par tous les appareils du tailnet, sans avoir à la retaper sur l'iPhone.";
+    aide.textContent = "Saisis la clé puis « Enregistrer sur le serveur » : elle sera réutilisée par tous les appareils du tailnet, sans avoir à la retaper sur l'iPhone.";
   }else{
     aide.textContent = "La clé reste dans cet appareil (stockage local du navigateur) et part directement vers Google à chaque requête.";
   }
@@ -325,8 +345,8 @@ document.getElementById("btnEnregistrerCle").addEventListener("click", async fun
     const data = await res.json();
     if(!res.ok || !data.ok) throw new Error(data.erreur || ("HTTP " + res.status));
     cleSurServeur = true;
-    journal("Clé enregistrée sur le Mac (" + data.cle_apercu + ").");
-    alert("Clé enregistrée sur le Mac.");
+    journal("Clé enregistrée sur le serveur (" + data.cle_apercu + ").");
+    alert("Clé enregistrée sur le serveur.");
     verifierServeur();
   }catch(e){
     journal("Échec de l'enregistrement de la clé : " + e.message);
@@ -447,7 +467,7 @@ document.getElementById("btnEnvoyer").addEventListener("click", async function()
 
   if(!question && !imageBase64){ alert("Saisis une question ou ajoute une image."); return; }
   if(!modeServeur && !cle){ alert("Sans serveur, la clé API est nécessaire dans cette page."); return; }
-  if(modeServeur && !cle && !cleSurServeur){ alert("Aucune clé enregistrée sur le Mac : saisis-la ici, puis « Enregistrer sur le Mac »."); return; }
+  if(modeServeur && !cle && !cleSurServeur){ alert("Aucune clé disponible : ouvre Paramétrages, saisis-la, puis « Enregistrer sur le serveur »."); return; }
 
   this.disabled = true;
   reponseEl.style.display = "none";
