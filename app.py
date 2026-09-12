@@ -16,10 +16,12 @@ Usage :
     python3 app.py --port 9000
 """
 
+import atexit
 import http.server
 import ipaddress
 import json
 import os
+import signal
 import socket
 import subprocess
 import sys
@@ -30,8 +32,17 @@ import urllib.request
 import webbrowser
 
 # ===================== VERSION & HISTORIQUE =====================
-VERSION = "2.0.0"
+VERSION = "2.0.1"
 HISTORIQUE = [
+    ("2.0.1", "2026-09-12",
+     "Corrigé : le serveur mourait avec le Terminal. Le simple fork hérité de la v1 laissait le "
+     "processus dans la session du Terminal, donc tué par le SIGHUP envoyé à la fermeture de la "
+     "fenêtre. Vraie mise en arrière-plan désormais : double fork avec setsid (plus de terminal de "
+     "contrôle), SIGHUP ignoré, sorties redirigées vers gemini-serveur.log. Le serveur survit à la "
+     "fermeture du Terminal et à la déconnexion, et ne s'arrête qu'avec la mise en veille/l'extinction "
+     "du Mac ou un arrêt explicite. Ajout d'un fichier PID et de deux commandes : --stop (arrêt propre) "
+     "et --statut (savoir s'il tourne, depuis quand, sur quel port), pour ne plus avoir à chercher le "
+     "processus avec lsof."),
     ("2.0.0", "2026-09-12",
      "Serveur utilisable depuis l'iPhone via Tailscale : écoute sur toutes les interfaces, détecte "
      "et affiche l'adresse Tailscale (IP et nom MagicDNS) à ouvrir depuis le téléphone, sert la page "
@@ -49,6 +60,8 @@ HISTORIQUE = [
 PORT = 8080
 DOSSIER = os.path.dirname(os.path.abspath(__file__))
 FICHIER_CLE = os.path.join(DOSSIER, "gemini-cle.json")
+FICHIER_PID = os.path.join(DOSSIER, "gemini-serveur.pid")
+FICHIER_LOG = os.path.join(DOSSIER, "gemini-serveur.log")
 RESEAU_TAILSCALE = ipaddress.ip_network("100.64.0.0/10")
 MODELE_DEFAUT = "gemini-2.5-flash"
 DELAI_GEMINI = 180  # secondes
@@ -340,6 +353,112 @@ def lancer_serveur():
         httpd.serve_forever()
 
 
+# ===================== ARRIÈRE-PLAN =====================
+def detacher():
+    """Détache réellement le processus du Terminal.
+
+    Un simple fork() ne suffit pas : l'enfant reste dans la session du Terminal et reçoit donc le
+    SIGHUP envoyé à la fermeture de la fenêtre — c'est ce qui faisait mourir le serveur. On enchaîne
+    donc fork + setsid (nouvelle session, plus aucun terminal de contrôle) + second fork (le processus
+    final n'est plus chef de session, il ne peut donc plus en acquérir un par accident), on ignore
+    explicitement SIGHUP, et on redirige les sorties vers un fichier journal puisqu'il n'y a plus de
+    terminal où écrire.
+    """
+    if os.fork() != 0:
+        os._exit(0)          # le Terminal reprend la main immédiatement
+    os.setsid()
+    if os.fork() != 0:
+        os._exit(0)
+    signal.signal(signal.SIGHUP, signal.SIG_IGN)
+    os.chdir(DOSSIER)
+    os.umask(0)
+
+    with open(os.devnull, "rb", 0) as entree:
+        os.dup2(entree.fileno(), sys.stdin.fileno())
+    sortie = open(FICHIER_LOG, "a", buffering=1, encoding="utf-8")
+    os.dup2(sortie.fileno(), sys.stdout.fileno())
+    os.dup2(sortie.fileno(), sys.stderr.fileno())
+    print(f"\n=== Démarrage v{VERSION} le {time.strftime('%Y-%m-%d %H:%M:%S')} "
+          f"— port {PORT}, PID {os.getpid()} ===")
+
+
+def ecrire_pid():
+    try:
+        with open(FICHIER_PID, "w", encoding="utf-8") as f:
+            json.dump({"pid": os.getpid(), "port": PORT, "version": VERSION,
+                       "depuis": time.strftime("%Y-%m-%d %H:%M:%S")}, f)
+    except Exception:
+        pass
+    atexit.register(effacer_pid)
+
+
+def effacer_pid():
+    try:
+        if lire_pid().get("pid") == os.getpid():
+            os.remove(FICHIER_PID)
+    except Exception:
+        pass
+
+
+def lire_pid():
+    try:
+        with open(FICHIER_PID, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def processus_vivant(pid):
+    try:
+        os.kill(pid, 0)          # signal 0 : teste l'existence sans rien envoyer
+        return True
+    except Exception:
+        return False
+
+
+def commande_statut():
+    infos = lire_pid()
+    pid = infos.get("pid")
+    if pid and processus_vivant(pid):
+        print(f"Serveur en marche — PID {pid}, port {infos.get('port', '?')}, "
+              f"v{infos.get('version', '?')}, depuis {infos.get('depuis', '?')}.")
+        print(f"Journal : {FICHIER_LOG}")
+        print("Arrêt : python3 app.py --stop")
+    else:
+        print("Aucun serveur en marche (aucun PID enregistré, ou processus disparu).")
+        if pid:
+            print("Fichier PID périmé, il sera remplacé au prochain démarrage.")
+
+
+def commande_stop():
+    infos = lire_pid()
+    pid = infos.get("pid")
+    if not pid or not processus_vivant(pid):
+        print("Aucun serveur lancé par app.py à arrêter.")
+        print("S'il reste malgré tout quelque chose sur le port : lsof -nP -iTCP:%d -sTCP:LISTEN" % PORT)
+        return
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except Exception as e:
+        print(f"Arrêt impossible : {e}")
+        return
+    for _ in range(20):          # laisse jusqu'à 2 secondes pour une sortie propre
+        if not processus_vivant(pid):
+            print(f"Serveur arrêté (PID {pid}).")
+            try:
+                os.remove(FICHIER_PID)
+            except Exception:
+                pass
+            return
+        time.sleep(0.1)
+    os.kill(pid, signal.SIGKILL)
+    print(f"Serveur arrêté de force (PID {pid}).")
+    try:
+        os.remove(FICHIER_PID)
+    except Exception:
+        pass
+
+
 # ===================== DÉMARRAGE =====================
 def main():
     global PORT, autoriser_lan
@@ -352,6 +471,13 @@ def main():
         except (IndexError, ValueError):
             print("Option --port mal formée, port 8080 conservé.")
 
+    if "--stop" in sys.argv:
+        commande_stop()
+        return
+    if "--statut" in sys.argv:
+        commande_statut()
+        return
+
     # Vérifie que le port est libre avant de forker : sinon l'échec passerait inaperçu.
     test = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     test.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -359,7 +485,14 @@ def main():
         test.bind(("", PORT))
     except OSError as e:
         print(f"Impossible d'utiliser le port {PORT} : {e}")
-        print("Un serveur est peut-être déjà lancé. Essaie : python3 app.py --port 8081")
+        infos = lire_pid()
+        if infos.get("pid") and processus_vivant(infos["pid"]):
+            print(f"Un serveur app.py tourne déjà (PID {infos['pid']}, depuis {infos.get('depuis', '?')}).")
+            print("Arrête-le avec : python3 app.py --stop")
+        else:
+            print("Un autre programme occupe ce port. Pour savoir lequel :")
+            print(f"  lsof -nP -iTCP:{PORT} -sTCP:LISTEN")
+            print("Ou choisis un autre port : python3 app.py --port 8081")
         sys.exit(1)
     finally:
         test.close()
@@ -377,12 +510,19 @@ def main():
     for adresse in adresses:
         print(f"  {adresse}")
     print("\nDepuis l'iPhone : ouvre la première adresse (Tailscale doit être actif sur les deux appareils).")
-    print("Arrêt : Ctrl+C au premier plan, sinon `pkill -f app.py`.\n")
+    if premier_plan:
+        print("Mode premier plan : le serveur s'arrête à la fermeture du Terminal (Ctrl+C).\n")
+    else:
+        print("Le serveur passe en arrière-plan et survit à la fermeture du Terminal.")
+        print(f"Journal : {FICHIER_LOG}")
+        print("Arrêt : python3 app.py --stop   ·   État : python3 app.py --statut\n")
     sys.stdout.flush()
 
     if not premier_plan and hasattr(os, "fork"):
-        if os.fork() != 0:
-            sys.exit(0)  # le terminal est rendu, le serveur continue en arrière-plan
+        detacher()
+
+    ecrire_pid()
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))   # --stop obtient une sortie propre
 
     fil = threading.Thread(target=lancer_serveur, daemon=True)
     fil.start()
@@ -394,8 +534,8 @@ def main():
 
     try:
         fil.join()
-    except KeyboardInterrupt:
-        print("\nServeur arrêté.")
+    except (KeyboardInterrupt, SystemExit):
+        print("Serveur arrêté.")
 
 
 if __name__ == "__main__":
