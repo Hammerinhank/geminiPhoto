@@ -1,165 +1,511 @@
 <!DOCTYPE html>
 <html lang="fr">
 <head>
-    <meta charset="UTF-8">
-    <title>Interface Gemini Multimodal</title>
-    <style>
-        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; max-width: 700px; margin: 40px auto; padding: 0 20px; background: #f5f5f7; color: #1d1d1f; }
-        h2 { font-size: 1.5rem; margin-bottom: 20px; }
-        .card { background: white; padding: 20px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); margin-bottom: 20px; }
-        label { display: block; font-weight: 600; margin-bottom: 8px; font-size: 0.9rem; }
-        input[type="text"], textarea { width: 100%; padding: 10px; border: 1px solid #d2d2d7; border-radius: 8px; font-size: 1rem; box-sizing: border-box; margin-bottom: 12px; }
-        textarea { height: 100px; resize: vertical; }
-        #drop-zone { border: 2px dashed #d2d2d7; border-radius: 8px; padding: 20px; text-align: center; color: #86868b; background: #fafafa; cursor: pointer; margin-bottom: 12px; min-height: 80px; display: flex; align-items: center; justify-content: center; flex-direction: column; }
-        #drop-zone.dragover { border-color: #0071e3; background: #e8f0fe; color: #0071e3; }
-        #preview { max-width: 100%; max-height: 150px; border-radius: 6px; margin-top: 10px; display: none; }
-        button { background: #0071e3; color: white; border: none; padding: 12px 20px; font-size: 1rem; font-weight: 600; border-radius: 8px; cursor: pointer; width: 100%; }
-        button:hover { background: #0077ed; }
-        #response { background: #fff; padding: 15px; border-radius: 8px; border: 1px solid #d2d2d7; white-space: pre-wrap; font-family: monospace; font-size: 0.9rem; margin-top: 20px; display: none; }
-        .loader { display: none; text-align: center; margin: 15px 0; color: #86868b; }
-    </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Gemini">
+<meta name="theme-color" content="#f5f5f7">
+<title>Requête Gemini</title>
+<style>
+  :root{
+    --fond:#f5f5f7;
+    --carte:#ffffff;
+    --texte:#1d1d1f;
+    --gris:#6e6e73;
+    --bord:#d2d2d7;
+    --bleu:#0071e3;
+    --vert:#128a4b;
+    --rouge:#c0392b;
+    --orange:#b35c00;
+  }
+  *{box-sizing:border-box;}
+  html{-webkit-text-size-adjust:100%;}
+  body{
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+    margin:0;padding:16px 16px calc(32px + env(safe-area-inset-bottom));
+    background:var(--fond);color:var(--texte);
+    max-width:760px;margin-inline:auto;
+    font-size:16px;line-height:1.45;
+  }
+  header.barre{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:12px;}
+  header.barre h1{font-size:1.35rem;margin:0;flex:1;}
+  .badge-version{
+    background:var(--texte);color:#fff;border:none;border-radius:999px;
+    padding:7px 14px;font-size:.95rem;font-weight:700;cursor:pointer;
+    box-shadow:0 2px 6px rgba(0,0,0,.18);
+  }
+  .badge-version:active{transform:scale(.97);}
+  .statut{
+    margin:0 0 16px;padding:10px 12px;border-radius:10px;
+    background:#eceef2;border:1px solid var(--bord);
+    font-size:.88rem;color:var(--gris);
+  }
+  .statut b{color:var(--texte);}
+  .statut .adresse{font-family:ui-monospace,Menlo,monospace;font-size:.86rem;color:var(--texte);}
+  .statut.ok{background:#e7f6ec;border-color:#b7e2c6;}
+  .statut.direct{background:#fff4e2;border-color:#f0d4a5;}
+  .carte{background:var(--carte);padding:16px;border-radius:14px;border:1px solid var(--bord);margin-bottom:16px;}
+  label{display:block;font-weight:600;margin-bottom:6px;font-size:.9rem;}
+  input[type="text"],input[type="password"],textarea,select{
+    width:100%;padding:11px;border:1px solid var(--bord);border-radius:10px;
+    font-size:16px;font-family:inherit;background:#fff;color:var(--texte);
+  }
+  textarea{min-height:110px;resize:vertical;}
+  .ligne{display:flex;gap:8px;flex-wrap:wrap;align-items:center;}
+  .ligne > *{flex:0 0 auto;}
+  .ligne .grandit{flex:1 1 160px;min-width:0;}
+  .aide{font-size:.82rem;color:var(--gris);margin:6px 0 0;}
+  .champ{margin-bottom:14px;}
+  .champ:last-child{margin-bottom:0;}
+  button{
+    background:var(--bleu);color:#fff;border:none;padding:11px 16px;
+    font-size:1rem;font-weight:600;border-radius:10px;cursor:pointer;font-family:inherit;
+  }
+  button:active{transform:scale(.98);}
+  button:disabled{opacity:.5;cursor:default;}
+  button.secondaire{background:#eceef2;color:var(--texte);border:1px solid var(--bord);}
+  button.pleine{width:100%;}
+  button.envoi{background:var(--vert);font-size:1.05rem;padding:15px;}
+  .zone-image{
+    border:2px dashed var(--bord);border-radius:12px;padding:16px;text-align:center;
+    color:var(--gris);background:#fafafa;font-size:.9rem;
+  }
+  .zone-image.survol{border-color:var(--bleu);background:#e8f0fe;color:var(--bleu);}
+  #apercu{max-width:100%;max-height:240px;border-radius:10px;display:none;margin-top:10px;}
+  .info-image{font-size:.82rem;color:var(--gris);margin-top:8px;display:none;}
+  .chargement{display:none;margin:14px 0;color:var(--orange);font-weight:600;}
+  .reponse{
+    display:none;background:#fff;border:1px solid var(--bord);border-left:4px solid var(--vert);
+    border-radius:10px;padding:14px;white-space:pre-wrap;overflow-wrap:anywhere;
+    font-size:.95rem;margin-top:12px;
+  }
+  .reponse.erreur{border-left-color:var(--rouge);color:var(--rouge);font-family:ui-monospace,Menlo,monospace;font-size:.85rem;}
+  details.journal{margin-top:16px;font-size:.85rem;color:var(--gris);}
+  details.journal summary{cursor:pointer;font-weight:600;color:var(--texte);}
+  #journalTexte{
+    width:100%;min-height:140px;margin-top:8px;font-family:ui-monospace,Menlo,monospace;
+    font-size:.78rem;background:#fff;border:1px solid var(--bord);border-radius:10px;padding:10px;
+  }
+  .overlay{
+    position:fixed;inset:0;background:rgba(0,0,0,.45);display:none;
+    align-items:flex-end;justify-content:center;padding:12px;z-index:50;
+  }
+  .overlay.visible{display:flex;}
+  .modale{
+    background:#fff;border-radius:16px;width:100%;max-width:640px;max-height:82vh;
+    display:flex;flex-direction:column;overflow:hidden;
+  }
+  .modale header{display:flex;align-items:center;gap:10px;padding:14px 16px;border-bottom:1px solid var(--bord);}
+  .modale header h2{margin:0;font-size:1.05rem;flex:1;}
+  .modale .contenu{overflow:auto;padding:14px 16px;}
+  .version-item{padding:10px 0;border-bottom:1px solid #eee;}
+  .version-item:last-child{border-bottom:none;}
+  .version-item .num{font-weight:700;}
+  .version-item .date{color:var(--gris);font-size:.82rem;margin-left:6px;}
+  .version-item p{margin:4px 0 0;font-size:.9rem;}
+  .fermer{background:none;border:none;color:var(--gris);font-size:1.3rem;padding:4px 8px;cursor:pointer;}
+  @media (prefers-reduced-motion:reduce){*{transition:none!important;}}
+</style>
 </head>
 <body>
 
-    <h2>Requête Gemini Multimodale</h2>
+<header class="barre">
+  <h1>Requête Gemini</h1>
+  <button class="badge-version" id="badgeVersion" type="button" title="Historique des versions">v2.0.0</button>
+</header>
 
-    <div class="card">
-        <label for="apiKey">Clé API Gemini :</label>
-        <input type="text" id="apiKey" placeholder="Entrez votre clé API...">
+<p class="statut" id="statutServeur">Recherche du serveur local…</p>
 
-        <label for="question">Votre question :</label>
-        <textarea id="question" placeholder="Posez votre question ici..."></textarea>
-
-        <label>Image (Glissez-déposez ou faites Cmd+V / Copier-Coller ici) :</label>
-        <div id="drop-zone">Glissez une image ici ou collez-la (Ctrl/Cmd + V)</div>
-        <img id="preview" alt="Aperçu de l'image">
-        <input type="hidden" id="imageBase64">
-        <input type="hidden" id="imageMimeType">
+<div class="carte">
+  <div class="champ">
+    <label for="cleApi">Clé API Gemini</label>
+    <div class="ligne">
+      <input type="password" class="grandit" id="cleApi" placeholder="AIza…" autocomplete="off" autocapitalize="off" spellcheck="false">
+      <button class="secondaire" id="btnVoirCle" type="button">👁</button>
+      <button class="secondaire" id="btnEnregistrerCle" type="button">Enregistrer sur le Mac</button>
     </div>
+    <p class="aide" id="aideCle">La clé reste sur cet appareil. Enregistrée sur le Mac, elle sert à toutes les requêtes passant par le serveur — l'iPhone n'a alors plus besoin de la saisir.</p>
+  </div>
 
-    <button id="sendBtn">Envoyer la requête</button>
+  <div class="champ">
+    <label for="modele">Modèle</label>
+    <select id="modele">
+      <option value="gemini-2.5-flash">gemini-2.5-flash (rapide)</option>
+      <option value="gemini-2.5-pro">gemini-2.5-pro (plus fin, plus lent)</option>
+      <option value="gemini-2.0-flash">gemini-2.0-flash</option>
+    </select>
+  </div>
 
-    <div class="loader" id="loader">Interrogation de Gemini en cours...</div>
-    <div id="response"></div>
+  <div class="champ">
+    <label for="question">Question</label>
+    <textarea id="question" placeholder="Que vois-tu sur cette image ?"></textarea>
+  </div>
+
+  <div class="champ">
+    <label>Image</label>
+    <div class="ligne" style="margin-bottom:10px;">
+      <button class="secondaire" id="btnPhoto" type="button">📷 Prendre une photo</button>
+      <button class="secondaire" id="btnFichier" type="button">🖼 Choisir une image</button>
+      <button class="secondaire" id="btnRetirer" type="button" style="display:none;">✕ Retirer</button>
+    </div>
+    <div class="zone-image" id="zoneImage">Glisse une image ici, ou colle-la avec Cmd+V (sur Mac). Sur iPhone, utilise les deux boutons ci-dessus.</div>
+    <img id="apercu" alt="Aperçu de l'image envoyée">
+    <p class="info-image" id="infoImage"></p>
+    <input type="file" id="fichierPhoto" accept="image/*" capture="environment" hidden>
+    <input type="file" id="fichierImage" accept="image/*" hidden>
+  </div>
+</div>
+
+<button class="envoi pleine" id="btnEnvoyer" type="button">Envoyer à Gemini</button>
+<p class="chargement" id="chargement">Gemini réfléchit… <span id="compteur">0 s</span></p>
+<div class="reponse" id="reponse"></div>
+<div class="ligne" id="actionsReponse" style="display:none;margin-top:10px;">
+  <button class="secondaire" id="btnCopier" type="button">📎 Copier la réponse</button>
+  <button class="secondaire" id="btnVider" type="button">🗑 Vider</button>
+</div>
+
+<details class="journal">
+  <summary>🪲 Journal</summary>
+  <p class="aide">Trace pas à pas de chaque requête : utile pour comprendre un échec depuis l'iPhone, où la console du navigateur n'est pas accessible.</p>
+  <div class="ligne" style="margin-top:8px;">
+    <button class="secondaire" id="btnCopierJournal" type="button">📎 Copier</button>
+    <button class="secondaire" id="btnViderJournal" type="button">🗑 Vider</button>
+  </div>
+  <textarea id="journalTexte" readonly></textarea>
+</details>
+
+<div class="overlay" id="overlayHistorique">
+  <div class="modale">
+    <header>
+      <h2>Historique des versions</h2>
+      <button class="fermer" id="fermerHistorique" type="button">✕</button>
+    </header>
+    <div class="contenu" id="contenuHistorique"></div>
+  </div>
+</div>
 
 <script>
-    const apiKeyInput = document.getElementById('apiKey');
-    const questionInput = document.getElementById('question');
-    const dropZone = document.getElementById('drop-zone');
-    const preview = document.getElementById('preview');
-    const imageBase64Input = document.getElementById('imageBase64');
-    const imageMimeTypeInput = document.getElementById('imageMimeType');
-    const sendBtn = document.getElementById('sendBtn');
-    const responseBox = document.getElementById('response');
-    const loader = document.getElementById('loader');
+(function(){
+"use strict";
 
-    // Restauration LocalStorage
-    if(localStorage.getItem('gemini_api_key')) apiKeyInput.value = localStorage.getItem('gemini_api_key');
-    if(localStorage.getItem('gemini_question')) questionInput.value = localStorage.getItem('gemini_question');
+/* ===================== VERSION & HISTORIQUE ===================== */
+const VERSION = "2.0.0";
+const HISTORIQUE = [
+  { version:"2.0.0", date:"2026-09-12", notes:"Version utilisable aussi bien sur iPhone que sur iMac via Tailscale. La page détecte automatiquement le serveur app.py et passe par lui pour interroger Gemini (la clé API peut alors rester sur le Mac, l'iPhone n'a plus à la saisir) ; si aucun serveur n'est trouvé, elle appelle Gemini directement avec la clé locale, comme avant. Ajout : prise de photo directe et choix dans la photothèque (le glisser-déposer et le Cmd+V n'existent pas sur iPhone), compression automatique de l'image avant envoi (une photo d'iPhone passe de plusieurs Mo à quelques centaines de Ko, et le format HEIC est converti en JPEG), choix du modèle, minuteur pendant l'attente, bouton de copie de la réponse, journal détaillé consultable depuis le téléphone, affichage de l'adresse Tailscale à utiliser depuis l'iPhone, et badge de version cliquable ouvrant cet historique." },
+  { version:"1.0.0", date:"2026-09-12", notes:"Version d'origine : une page unique appelant directement l'API Gemini depuis le navigateur, avec clé API et question conservées en localStorage, image fournie par glisser-déposer ou Cmd+V, et réponse affichée en texte brut." }
+];
+document.getElementById("badgeVersion").textContent = "v" + VERSION;
+document.getElementById("contenuHistorique").innerHTML = HISTORIQUE.map(h =>
+  `<div class="version-item"><span class="num">v${h.version}</span><span class="date">${h.date}</span><p>${h.notes}</p></div>`
+).join("");
+document.getElementById("badgeVersion").addEventListener("click", ()=>{
+  document.getElementById("overlayHistorique").classList.add("visible");
+});
+document.getElementById("fermerHistorique").addEventListener("click", ()=>{
+  document.getElementById("overlayHistorique").classList.remove("visible");
+});
+document.getElementById("overlayHistorique").addEventListener("click", e=>{
+  if(e.target.id === "overlayHistorique") e.currentTarget.classList.remove("visible");
+});
 
-    // Sauvegarde temps réel LocalStorage
-    apiKeyInput.addEventListener('input', () => localStorage.setItem('gemini_api_key', apiKeyInput.value));
-    questionInput.addEventListener('input', () => localStorage.setItem('gemini_question', questionInput.value));
+/* ===================== JOURNAL ===================== */
+const journalEl = document.getElementById("journalTexte");
+function journal(message){
+  const t = new Date().toLocaleTimeString("fr-FR");
+  journalEl.value += `[${t}] ${message}\n`;
+  journalEl.scrollTop = journalEl.scrollHeight;
+}
+document.getElementById("btnViderJournal").addEventListener("click", ()=>{ journalEl.value = ""; });
+document.getElementById("btnCopierJournal").addEventListener("click", ()=>{
+  copierTexte(journalEl.value, "Journal copié");
+});
+/* En HTTP simple (ce qui est le cas via Tailscale sans certificat), navigator.clipboard n'existe pas :
+   Safari le réserve aux pages sécurisées. On retombe alors sur l'ancienne méthode execCommand, qui,
+   elle, fonctionne encore — sans quoi aucune copie ne serait possible depuis l'iPhone. */
+function copierTexte(texte, messageOk){
+  if(!texte){ alert("Rien à copier."); return; }
+  if(navigator.clipboard && navigator.clipboard.writeText && window.isSecureContext){
+    navigator.clipboard.writeText(texte).then(()=>alert(messageOk)).catch(()=>copierParRepli(texte, messageOk));
+  }else{
+    copierParRepli(texte, messageOk);
+  }
+}
+function copierParRepli(texte, messageOk){
+  const zone = document.createElement("textarea");
+  zone.value = texte;
+  zone.setAttribute("readonly", "");
+  zone.style.position = "fixed";
+  zone.style.opacity = "0";
+  document.body.appendChild(zone);
+  zone.select();
+  zone.setSelectionRange(0, texte.length);
+  let ok = false;
+  try{ ok = document.execCommand("copy"); }catch(e){ ok = false; }
+  zone.remove();
+  alert(ok ? messageOk : "Copie refusée par le navigateur — sélectionne le texte à la main.");
+}
 
-    // Gestion Image (Drag & Drop)
-    dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('dragover'); });
-    dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
-    dropZone.addEventListener('drop', (e) => {
-        e.preventDefault();
-        dropZone.classList.remove('dragover');
-        if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-            processFile(e.dataTransfer.files[0]);
-        }
+/* ===================== ÉTAT ===================== */
+let modeServeur = false;        // true = les requêtes passent par app.py, false = appel direct à Gemini
+let cleSurServeur = false;      // true = une clé est déjà enregistrée côté Mac
+let imageBase64 = "";
+let imageMime = "";
+
+const cleInput = document.getElementById("cleApi");
+const questionInput = document.getElementById("question");
+const modeleSelect = document.getElementById("modele");
+const apercu = document.getElementById("apercu");
+const infoImage = document.getElementById("infoImage");
+const zoneImage = document.getElementById("zoneImage");
+const reponseEl = document.getElementById("reponse");
+const chargementEl = document.getElementById("chargement");
+const statutEl = document.getElementById("statutServeur");
+
+/* ===================== PRÉFÉRENCES LOCALES ===================== */
+function lire(cle){ try{ return localStorage.getItem(cle) || ""; }catch(e){ return ""; } }
+function ecrire(cle, valeur){ try{ localStorage.setItem(cle, valeur); }catch(e){} }
+
+cleInput.value = lire("gemini_api_key");
+questionInput.value = lire("gemini_question");
+if(lire("gemini_modele")) modeleSelect.value = lire("gemini_modele");
+cleInput.addEventListener("input", ()=>ecrire("gemini_api_key", cleInput.value));
+questionInput.addEventListener("input", ()=>ecrire("gemini_question", questionInput.value));
+modeleSelect.addEventListener("change", ()=>ecrire("gemini_modele", modeleSelect.value));
+
+document.getElementById("btnVoirCle").addEventListener("click", ()=>{
+  cleInput.type = cleInput.type === "password" ? "text" : "password";
+});
+
+/* ===================== DÉTECTION DU SERVEUR ===================== */
+async function verifierServeur(){
+  try{
+    const res = await fetch("api/statut", { cache:"no-store" });
+    if(!res.ok) throw new Error("HTTP " + res.status);
+    const info = await res.json();
+    modeServeur = true;
+    cleSurServeur = !!info.cle_enregistree;
+    journal(`Serveur app.py v${info.version} détecté — clé enregistrée sur le Mac : ${cleSurServeur ? "oui (" + info.cle_apercu + ")" : "non"}.`);
+    const adresses = (info.adresses || []).map(a => `<span class="adresse">${a}</span>`).join(" · ");
+    statutEl.className = "statut ok";
+    statutEl.innerHTML =
+      `<b>Servi par app.py v${info.version}</b> — les requêtes passent par le Mac.` +
+      `<br>Clé sur le Mac : ${cleSurServeur ? "<b>enregistrée</b> (" + info.cle_apercu + ")" : "<b>aucune</b>, saisis-la puis enregistre-la"}.` +
+      (adresses ? `<br>Adresse à ouvrir depuis l'iPhone : ${adresses}` : "") +
+      (info.tailscale_absent ? `<br>Tailscale n'a pas été trouvé sur ce Mac : seule l'adresse du réseau local est proposée.` : "");
+  }catch(e){
+    modeServeur = false;
+    journal("Aucun serveur app.py joignable (" + e.message + ") — mode direct : le navigateur appelle Gemini lui-même.");
+    statutEl.className = "statut direct";
+    statutEl.innerHTML = "<b>Mode direct</b> — la page appelle Gemini elle-même, avec la clé saisie ci-dessous. Lance app.py sur le Mac pour partager la clé et passer par le serveur.";
+  }
+  majAideCle();
+}
+function majAideCle(){
+  const aide = document.getElementById("aideCle");
+  document.getElementById("btnEnregistrerCle").style.display = modeServeur ? "inline-flex" : "none";
+  if(modeServeur && cleSurServeur){
+    aide.textContent = "Une clé est enregistrée sur le Mac : tu peux laisser ce champ vide. Une clé saisie ici a la priorité pour les requêtes lancées depuis cet appareil.";
+  }else if(modeServeur){
+    aide.textContent = "Saisis la clé puis « Enregistrer sur le Mac » : elle sera réutilisée par tous les appareils du tailnet, sans avoir à la retaper sur l'iPhone.";
+  }else{
+    aide.textContent = "La clé reste dans cet appareil (stockage local du navigateur) et part directement vers Google à chaque requête.";
+  }
+}
+document.getElementById("btnEnregistrerCle").addEventListener("click", async function(){
+  const cle = cleInput.value.trim();
+  if(!cle){ alert("Saisis d'abord une clé."); return; }
+  this.disabled = true;
+  try{
+    const res = await fetch("api/cle", {
+      method:"POST",
+      headers:{ "Content-Type":"application/json" },
+      body: JSON.stringify({ cle })
     });
+    const data = await res.json();
+    if(!res.ok || !data.ok) throw new Error(data.erreur || ("HTTP " + res.status));
+    cleSurServeur = true;
+    journal("Clé enregistrée sur le Mac (" + data.cle_apercu + ").");
+    alert("Clé enregistrée sur le Mac.");
+    verifierServeur();
+  }catch(e){
+    journal("Échec de l'enregistrement de la clé : " + e.message);
+    alert("Échec de l'enregistrement : " + e.message);
+  }finally{
+    this.disabled = false;
+  }
+});
 
-    // Gestion Copier-Coller global (Cmd+V)
-    window.addEventListener('paste', (e) => {
-        const items = e.clipboardData.items;
-        for (let item of items) {
-            if (item.type.indexOf('image') === 0) {
-                processFile(item.getAsFile());
-                break;
-            }
-        }
-    });
+/* ===================== IMAGE ===================== */
+/* Les photos d'iPhone pèsent plusieurs Mo et sont souvent en HEIC, que l'API Gemini n'accepte pas :
+   on les redessine dans un canvas, ce qui les convertit en JPEG et réduit leur taille avant l'envoi. */
+function compresserImage(file, maxDim, qualite){
+  return new Promise((resolve, reject)=>{
+    const lecteur = new FileReader();
+    lecteur.onload = ev=>{
+      const img = new Image();
+      img.onload = ()=>{
+        let l = img.naturalWidth || img.width, h = img.naturalHeight || img.height;
+        if(l > h && l > maxDim){ h = Math.round(h * maxDim / l); l = maxDim; }
+        else if(h > maxDim){ l = Math.round(l * maxDim / h); h = maxDim; }
+        const canvas = document.createElement("canvas");
+        canvas.width = l; canvas.height = h;
+        canvas.getContext("2d").drawImage(img, 0, 0, l, h);
+        resolve({ dataUrl: canvas.toDataURL("image/jpeg", qualite), largeur:l, hauteur:h });
+      };
+      img.onerror = ()=>reject(new Error("Image illisible par le navigateur"));
+      img.src = ev.target.result;
+    };
+    lecteur.onerror = ()=>reject(new Error("Lecture du fichier impossible"));
+    lecteur.readAsDataURL(file);
+  });
+}
+async function traiterFichier(file){
+  if(!file){ return; }
+  journal(`Image reçue : ${file.name || "sans nom"} · ${file.type || "type inconnu"} · ${Math.round(file.size/1024)} Ko.`);
+  infoImage.style.display = "block";
+  infoImage.textContent = "Compression en cours…";
+  try{
+    const { dataUrl, largeur, hauteur } = await compresserImage(file, 1600, 0.85);
+    imageBase64 = dataUrl.split(",")[1];
+    imageMime = "image/jpeg";
+    apercu.src = dataUrl;
+    apercu.style.display = "block";
+    zoneImage.style.display = "none";
+    document.getElementById("btnRetirer").style.display = "inline-flex";
+    const ko = Math.round(imageBase64.length * 0.75 / 1024);
+    infoImage.textContent = `${largeur}×${hauteur} px · environ ${ko} Ko envoyés à Gemini`;
+    journal(`Image prête : ${largeur}×${hauteur} px, ~${ko} Ko en JPEG.`);
+  }catch(e){
+    infoImage.textContent = "Cette image n'a pas pu être préparée : " + e.message;
+    journal("Échec de la préparation de l'image : " + e.message);
+  }
+}
+function retirerImage(){
+  imageBase64 = ""; imageMime = "";
+  apercu.style.display = "none"; apercu.removeAttribute("src");
+  zoneImage.style.display = "block";
+  infoImage.style.display = "none";
+  document.getElementById("btnRetirer").style.display = "none";
+  document.getElementById("fichierPhoto").value = "";
+  document.getElementById("fichierImage").value = "";
+  journal("Image retirée.");
+}
+document.getElementById("btnRetirer").addEventListener("click", retirerImage);
+document.getElementById("btnPhoto").addEventListener("click", ()=>document.getElementById("fichierPhoto").click());
+document.getElementById("btnFichier").addEventListener("click", ()=>document.getElementById("fichierImage").click());
+document.getElementById("fichierPhoto").addEventListener("change", e=>traiterFichier(e.target.files[0]));
+document.getElementById("fichierImage").addEventListener("change", e=>traiterFichier(e.target.files[0]));
 
-    function processFile(file) {
-        const reader = new FileReader();
-        reader.onload = function(event) {
-            const base64String = event.target.result.split(',')[1];
-            imageBase64Input.value = base64String;
-            imageMimeTypeInput.value = file.type;
-            preview.src = event.target.result;
-            preview.style.display = 'block';
-            dropZone.style.display = 'none';
-        };
-        reader.readAsDataURL(file);
+zoneImage.addEventListener("click", ()=>document.getElementById("fichierImage").click());
+zoneImage.addEventListener("dragover", e=>{ e.preventDefault(); zoneImage.classList.add("survol"); });
+zoneImage.addEventListener("dragleave", ()=>zoneImage.classList.remove("survol"));
+zoneImage.addEventListener("drop", e=>{
+  e.preventDefault();
+  zoneImage.classList.remove("survol");
+  if(e.dataTransfer.files && e.dataTransfer.files[0]) traiterFichier(e.dataTransfer.files[0]);
+});
+window.addEventListener("paste", e=>{
+  const items = (e.clipboardData && e.clipboardData.items) || [];
+  for(const item of items){
+    if(item.type.indexOf("image") === 0){ traiterFichier(item.getAsFile()); break; }
+  }
+});
+
+/* ===================== ENVOI ===================== */
+let minuteur = null;
+function demarrerAttente(){
+  const depart = Date.now();
+  chargementEl.style.display = "block";
+  document.getElementById("compteur").textContent = "0 s";
+  minuteur = setInterval(()=>{
+    document.getElementById("compteur").textContent = Math.round((Date.now()-depart)/1000) + " s";
+  }, 1000);
+}
+function arreterAttente(){
+  clearInterval(minuteur);
+  chargementEl.style.display = "none";
+}
+function afficherReponse(texte, estErreur){
+  reponseEl.textContent = texte;
+  reponseEl.className = estErreur ? "reponse erreur" : "reponse";
+  reponseEl.style.display = "block";
+  document.getElementById("actionsReponse").style.display = "flex";
+}
+function extraireTexte(data){
+  try{
+    const parts = data.candidates[0].content.parts || [];
+    const texte = parts.map(p => p.text || "").join("").trim();
+    return texte || null;
+  }catch(e){ return null; }
+}
+
+document.getElementById("btnEnvoyer").addEventListener("click", async function(){
+  const question = questionInput.value.trim();
+  const cle = cleInput.value.trim();
+  const modele = modeleSelect.value;
+
+  if(!question && !imageBase64){ alert("Saisis une question ou ajoute une image."); return; }
+  if(!modeServeur && !cle){ alert("Sans serveur, la clé API est nécessaire dans cette page."); return; }
+  if(modeServeur && !cle && !cleSurServeur){ alert("Aucune clé enregistrée sur le Mac : saisis-la ici, puis « Enregistrer sur le Mac »."); return; }
+
+  this.disabled = true;
+  reponseEl.style.display = "none";
+  document.getElementById("actionsReponse").style.display = "none";
+  demarrerAttente();
+  journal(`Envoi — modèle ${modele} · question ${question.length} caractère(s) · image ${imageBase64 ? "oui" : "non"} · via ${modeServeur ? "le serveur app.py" : "appel direct"}.`);
+
+  try{
+    let texte = null, brut = null;
+
+    if(modeServeur){
+      const res = await fetch("api/gemini", {
+        method:"POST",
+        headers:{ "Content-Type":"application/json" },
+        body: JSON.stringify({ question, image: imageBase64, mime_type: imageMime, modele, cle })
+      });
+      const data = await res.json();
+      if(!res.ok || !data.ok) throw new Error(data.erreur || ("Le serveur a répondu HTTP " + res.status));
+      texte = data.texte; brut = data.brut;
+      journal(`Réponse du serveur en ${data.duree}s — ${texte ? texte.length + " caractère(s)" : "aucun texte"}.`);
+    }else{
+      const parts = [];
+      if(question) parts.push({ text: question });
+      if(imageBase64) parts.push({ inline_data: { mime_type: imageMime, data: imageBase64 } });
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${modele}:generateContent?key=${encodeURIComponent(cle)}`;
+      const res = await fetch(url, {
+        method:"POST",
+        headers:{ "Content-Type":"application/json" },
+        body: JSON.stringify({ contents:[{ parts }] })
+      });
+      brut = await res.json();
+      if(!res.ok) throw new Error((brut.error && brut.error.message) || ("Google a répondu HTTP " + res.status));
+      texte = extraireTexte(brut);
+      journal(`Réponse directe de Google — ${texte ? texte.length + " caractère(s)" : "aucun texte"}.`);
     }
 
-    // Clic sur la zone de drop pour réinitialiser ou autre si besoin
-    dropZone.addEventListener('click', () => {
-        alert("Vous pouvez coller une image directement avec Cmd+V ou glisser-déposer un fichier image dans cette zone.");
-    });
+    if(texte) afficherReponse(texte, false);
+    else afficherReponse("Gemini n'a renvoyé aucun texte. Réponse brute :\n\n" + JSON.stringify(brut, null, 2), true);
+  }catch(e){
+    journal("Échec : " + e.message);
+    afficherReponse("La requête a échoué : " + e.message, true);
+  }finally{
+    arreterAttente();
+    this.disabled = false;
+  }
+});
 
-    // Envoi de la requête
-    sendBtn.addEventListener('click', async () => {
-        const apiKey = apiKeyInput.value.trim();
-        const question = questionInput.value.trim();
-        const imgData = imageBase64Input.value;
-        const mimeType = imageMimeTypeInput.value;
+document.getElementById("btnCopier").addEventListener("click", ()=>copierTexte(reponseEl.textContent, "Réponse copiée"));
+document.getElementById("btnVider").addEventListener("click", ()=>{
+  reponseEl.style.display = "none";
+  document.getElementById("actionsReponse").style.display = "none";
+});
 
-        if (!apiKey) { alert("Veuillez renseigner votre clé API."); return; }
-        if (!question && !imgData) { alert("Veuillez saisir une question ou fournir une image."); return; }
+/* ===================== DÉMARRAGE ===================== */
+journal(`Page v${VERSION} ouverte sur ${location.href}`);
+verifierServeur();
 
-        loader.style.display = 'block';
-        responseBox.style.display = 'none';
-
-        // Construction du payload JSON exactement comme demandé
-        let partsArray = [];
-        if (question) {
-            partsArray.push({ "text": question });
-        }
-        if (imgData) {
-            partsArray.push({
-                "inline_data": {
-                    "mime_type": mimeType,
-                    "data": imgData
-                }
-            });
-        }
-
-        const payload = {
-            "contents": [
-                {
-                    "parts": partsArray
-                }
-            ]
-        };
-
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
-
-        try {
-            const res = await fetch(url, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
-            });
-            const data = await res.json();
-            loader.style.display = 'none';
-            responseBox.style.display = 'block';
-
-            if (data.candidates && data.candidates[0].content.parts[0].text) {
-                responseBox.textContent = data.candidates[0].content.parts[0].text;
-            } else {
-                responseBox.textContent = JSON.stringify(data, null, 2);
-            }
-        } catch (err) {
-            loader.style.display = 'none';
-            responseBox.style.display = 'block';
-            responseBox.textContent = "Erreur réseau : " + err.message;
-        }
-    });
+})();
 </script>
-
 </body>
 </html>
